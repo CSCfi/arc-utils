@@ -1,0 +1,162 @@
+#!/bin/bash 
+
+# Location of the ARC jobmanager
+# Your should edit this line according to your arcrunner installation
+jobmanagerpath=("/appl/opt/arcrunner")
+
+
+#check that the path is correct
+if [[ ! -e "$jobmanagerpath"/jobmanager_arc.py ]]; then
+  echo "ERROR!"
+  echo "Jobmangerpath not correct"
+  exit 1
+fi
+
+#check that arc is in use
+if ! command -v arcsub >/dev/null 2>&1; then
+    echo -e "\nError: arcsub command not found!" >&2
+    exit 1
+fi
+
+proxytime=$(arcproxy -I | grep "Time left" | grep seconds )
+if [[ "$proxytime" == "" ]]; then
+   echo "---------------------------------------"
+   echo " Couldn't find a valid proxy."
+   echo " Try running command:  "
+   echo "   arcproxy -S fgi.csc.fi"
+   echo "---------------------------------------"
+   exit
+fi
+echo "------------------------------------------------------------"
+echo " $proxytime"
+echo "------------------------------------------------------------"
+
+
+
+
+args=($argv[1-])
+job_args=""
+clusterfile=0
+xrslfile=0
+
+while [[ $# -ge 1 ]]
+do
+    case "$1" in
+          '-xrsl')  job_args="$job_args --xrsl $2"; shift 2; xrslfile=1 ;;
+          '-R')
+            if [[ ! -e "$2" ]]; then
+               echo ""
+               echo "Cluster list file: $inputseq2 does not exist"
+               echo ""
+               echo "-----------------------------------------------------------"
+               exit 1
+             fi
+             clusterfile=1
+             set job_args="$job_args -R  $2"
+             shift
+             shift
+             ;;
+          '-W')
+            job_args="$job_args -W $2"
+            shift
+            shift
+            ;;             
+           '-Q')
+             job_args="$job_args -Q $2"
+             shift
+             shift
+            ;;
+           '-S')
+             job_args="$job_args -S $2"
+             shift 
+             shift
+            ;;
+            '-J')
+              job_args="$job_args -J $2"
+              shift
+              shift
+             ;;
+             *)
+              cat <<EOF
+-------------------------------------------------------------------------------------
+Arcrunner is help tool to run large amounts of jobs in FGCI grid environment.
+The minimum input for this command is:
+
+   arcrunner -xrsl job_desc.xrsl 
+
+When the command is launched, it first checks all the subfolders of the
+current working directory. If xrsl formantted job description file, defined
+with the option -xrsl, is found from the subfolder then the script submits the
+job to be executed in FGCI grid environment.  
+
+In the cases of large anounts of grid jobs, all jobs are not submitted at once.
+In these cases the command tries to optimize the usage of the grid environment. 
+It follows how many jobs are queueing in the clusters and sends more jobs only 
+when there are free resources available. The command keeps a track on the executed grid 
+jobs and starts sending more jobs to those clusters that execute the jobs most efficiently. 
+
+The maximum number of jobs, waiting to be executed, can be defined woth option: -W
+ 
+If some job stays quieueing for too long time, it is withdrawn from this stalled 
+queue and submitted to another cluster.
+
+As some of the clusters may not work properly and part of the jobs may fail due to technical reasons.  
+If this happens, the failed grid jobs are re-submitted to other clusters three times before they are 
+considered as failed jobs.  
+
+When a job finishes successfully, the job-manager retrieves the result files from the grid to the grid job 
+directory.
+
+Option summary:
+
+	-xrsl        The common xrsl file name that defines the jobs   
+        -R	     Cluster list defining the clusters to be used
+        -W           Maximum number of jobs in the grid waiting to run (default 200)
+        -Q           The maximum time a jobs stays in a queue before being resubmitted. (Default 3600s)
+        -S           The maximum time a jobs stays in submitted state before being resubmitted (Default 3600s)
+        -J           Maximum number of jobs to be in execution at agive time in the grid. (Default 1000 jobs)
+EOF
+
+	
+                    exit 1
+        ;;
+    esac
+done
+
+
+#Check that xrsl file is deined
+if [[ $xrslfile -eq 0 ]]; then
+   echo
+   echo "Please define the job description file name with option:"
+   echo " -xrsl filename"
+   echo "--------------------------------------------------------"
+   exit 1
+fi
+
+
+# create cluster file if needed
+if [[ $clusterfile -eq 0 ]]; then
+   if [[ -e $HOME/.arc/clusters_for_arcrunner ]]; then
+        rm -f $HOME/.arc/clusters_for_arcrunner
+   fi
+
+   arcinfo -g fgci.csc.fi | grep Submission | grep "status: ok," |\
+   grep https: |  awk '{print $3}' | awk -F "/" '{print  $3}' |\
+   awk -F ":" '{print $1}' | sort | uniq > $HOME/.arc/clusters_for_arcrunner
+  
+   #arcinfo | grep '.fi$' | grep -v cms | awk '{print $3}' >  $HOME/.arc/clusters_for_arcrunner
+   num_clust=$(cat $HOME/.arc/clusters_for_arcrunner | wc -l)
+   if [[ $num_clust -lt 1 ]]; then
+      echo "Error"
+      echo "Could not create a list of FGCI clusters!"
+      echo "Please contact helpdesk@csc.fi"
+      echo "            "
+      exit 1
+   fi
+   job_args="$job_args -R $HOME/.arc/clusters_for_arcrunner"   
+fi
+
+echo "python  $jobmanagerpath/jobmanager_arc.py $job_args"
+python  $jobmanagerpath/jobmanager_arc.py $job_args
+
+
